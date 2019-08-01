@@ -1,286 +1,317 @@
-var path = require('path');
-var os = require('os');
-var $ = require('jquery');
-var request = require('request');
-var fs = require('fs');
-var constants = require('./constants.js');
-var profile = require('./profile.js');
-var service = require('./service.js');
-var editor = require('./editor.js');
-var errors = require('./errors.js');
-var logger = require('./logger.js');
-var config = require('./config.js');
-var utils = require('./utils.js');
-var profileView = require('./profileView.js');
-var remote = require('electron').remote;
-var webFrame = require('electron').webFrame;
-var getGlobal = remoteRequire().getGlobal;
-var Menu = remoteRequire().Menu;
-var app = remoteRequire().app;
+var path = require("path")
+var request = require("request")
+var fs = require("fs")
+var constants = require("./constants.js")
+var profile = require("./profile.js")
+var service = require("./service.js")
+var utils = require("./utils.js")
+var profileView = require("./profileView.js")
 
-constants.key = getGlobal('key');
-constants.icon = getGlobal('icon');
-profileView.init();
+/**
+ * The expected command is
+ *
+ * cli connect {otp-code}
+ */
+const [, , action, otp] = process.argv
 
-var systemEdtr;
-var serviceEdtr;
-var $systemLogs = $('.system-logs');
-var $serviceLogs = $('.service-logs');
-
-var readSystemLogs = function(callback) {
-  var pth = path.join(utils.getUserDataPath(), 'pritunl.log');
-
-  fs.exists(pth, function(exists) {
-    if (!exists) {
-      callback('');
-      return;
-    }
-
-    fs.readFile(pth, 'utf8', function(err, data) {
-      if (err) {
-        err = new errors.ReadError(
-          'init: Failed to read system logs (%s)', err);
-        logger.error(err);
-      } else {
-        callback(data);
-      }
-    });
-  });
-};
-
-var clearSystemLogs = function(callback) {
-  var pth = path.join(utils.getUserDataPath(), 'pritunl.log');
-
-  fs.exists(pth, function(exists) {
-    if (!exists) {
-      callback();
-      return;
-    }
-
-    fs.unlink(pth, function(err) {
-      if (err) {
-        err = new errors.ReadError(
-          'init: Failed to clear system logs (%s)', err);
-        logger.error(err);
-      } else {
-        callback();
-      }
-    });
-  });
-};
-
-var readServiceLogs = function(callback) {
-  var pth;
-  if (process.platform === 'darwin') {
-    pth = path.join(path.sep, 'Applications', 'Pritunl.app', 'Contents',
-      'Resources', 'pritunl.log');
-  } else if (process.platform === 'win32') {
-    pth = path.join('C:\\', 'ProgramData', 'Pritunl', 'pritunl.log');
+var authPath
+if (process.argv.indexOf("--dev") !== -1) {
+  authPath = path.join("..", "dev", "auth")
+} else {
+  if (process.platform === "win32") {
+    authPath = path.join("C:\\", "ProgramData", "Pritunl", "auth")
+  } else if (process.platform === "darwin") {
+    authPath = path.join(
+      path.sep,
+      "Applications",
+      "Pritunl.app",
+      "Contents",
+      "Resources",
+      "auth"
+    )
   } else {
-    pth = path.join(path.sep, 'var', 'log', 'pritunl.log');
+    authPath = path.join(path.sep, "var", "run", "pritunl.auth")
   }
-
-  fs.exists(pth, function(exists) {
-    if (!exists) {
-      callback('');
-      return;
-    }
-
-    fs.readFile(pth, 'utf8', function(err, data) {
-      if (err) {
-        err = new errors.ReadError(
-          'init: Failed to read service logs (%s)', err);
-        logger.error(err);
-      } else {
-        callback(data);
-      }
-    });
-  });
-};
-
-var openSystemEditor = function() {
-  if (systemEdtr) {
-    return;
-  }
-
-  readSystemLogs(function(data) {
-    $systemLogs.addClass('open');
-
-    if (systemEdtr) {
-      systemEdtr.destroy();
-    }
-
-    var $editor = $systemLogs.find('.editor');
-    systemEdtr = new editor.Editor('system', $editor);
-    systemEdtr.create();
-    systemEdtr.set(data);
-  });
-};
-var closeSystemEditor = function() {
-  if (systemEdtr) {
-    systemEdtr.destroy();
-    systemEdtr = null;
-  }
-
-  var $editor = $systemLogs.find('.editor');
-  $systemLogs.removeClass('open');
-  setTimeout(function() {
-    $editor.empty();
-    $editor.attr('class', 'editor');
-  }, 185);
-};
-
-var openServiceEditor = function() {
-  if (serviceEdtr) {
-    return;
-  }
-
-  readServiceLogs(function(data) {
-    $serviceLogs.addClass('open');
-
-    if (serviceEdtr) {
-      serviceEdtr.destroy();
-    }
-
-    var $editor = $serviceLogs.find('.editor');
-    serviceEdtr = new editor.Editor('service', $editor);
-    serviceEdtr.create();
-    serviceEdtr.set(data);
-  });
-};
-var closeServiceEditor = function() {
-  if (serviceEdtr) {
-    serviceEdtr.destroy();
-    serviceEdtr = null;
-  }
-
-  var $editor = $serviceLogs.find('.editor');
-  $serviceLogs.removeClass('open');
-  setTimeout(function() {
-    $editor.empty();
-    $editor.attr('class', 'editor');
-  }, 185);
-};
-
-config.onReady(function() {
-  $('.auto-reconnect').text('Auto Reconnect ' +
-    (!config.settings.disable_reconnect ? 'On' : 'Off'));
-  $('.tray-icon').text('Tray Icon ' +
-    (!config.settings.disable_tray_icon ? 'On' : 'Off'));
-});
-
-$('.system-logs .close').click(function(){
-  closeSystemEditor();
-});
-
-$('.system-logs .clear').click(function(){
-  clearSystemLogs(function() {
-    if (systemEdtr) {
-      systemEdtr.set('');
-    }
-  });
-});
-
-$('.service-logs .close').click(function(){
-  closeServiceEditor();
-});
-
-if (os.platform() === 'darwin') {
-  webFrame.setZoomFactor(0.8);
 }
 
-$('.open-main-menu').click(function() {
-  $('.main-menu').toggleClass('show');
-});
-$('.main-menu .menu-version').click(function(evt) {
-  if (evt.shiftKey) {
-    remote.getCurrentWindow().openDevTools();
-    return;
-  }
-});
-$('.main-menu .menu-version').text('Pritunl v' + constants.version);
-$('.main-menu .menu-system-logs').click(function (){
-  closeServiceEditor();
-  openSystemEditor();
-  setTimeout(function() {
-    $('.main-menu').removeClass('show');
-  }, 400);
-});
-$('.main-menu .menu-service-logs').click(function (){
-  closeSystemEditor();
-  openServiceEditor();
-  setTimeout(function() {
-    $('.main-menu').removeClass('show');
-  }, 400);
-});
-$('.main-menu .menu-restart').click(function (){
-  request.post({
-    url: 'http://' + constants.serviceHost + '/restart',
-    headers: {
-      'Auth-Key': constants.key,
-      'User-Agent': 'pritunl'
-    }
-  });
-});
-$('.main-menu .auto-reconnect').click(function (){
-  config.settings.disable_reconnect = !config.settings.disable_reconnect;
-  $('.auto-reconnect').text('Auto Reconnect ' +
-    (!config.settings.disable_reconnect ? 'On' : 'Off'));
-  config.save();
-});
-$('.main-menu .tray-icon').click(function (){
-  config.settings.disable_tray_icon = !config.settings.disable_tray_icon;
-  $('.tray-icon').text('Tray Icon ' +
-    (!config.settings.disable_tray_icon ? 'On' : 'Off'));
-  config.save();
-});
+try {
+  global.key = fs.readFileSync(authPath, "utf8")
+  constants.key = global.key
+} catch (err) {
+  global.key = null
+  constants.key = null
+}
 
-$('.header .close').click(function() {
-  remote.getCurrentWindow().close();
-});
-$('.header .maximize').click(function(evt) {
-  var win = remote.getCurrentWindow();
+const getGlobal = name => global[name]
 
-  if (evt.shiftKey) {
-    $('.header .version').toggle();
-    return;
-  }
+constants.key = getGlobal("key")
+constants.icon = getGlobal("icon")
 
-  if (!win.maximizedPrev) {
-    win.maximizedPrev = win.getSize();
-    win.setSize(600, 790);
-  } else {
-    win.setSize(win.maximizedPrev[0], win.maximizedPrev[1]);
-    win.maximizedPrev = null;
-  }
-});
-$('.header .minimize').click(function(evt) {
-  if (evt.shiftKey) {
-    remote.getCurrentWindow().openDevTools();
-    return;
-  }
-
-  remote.getCurrentWindow().minimize();
-});
-$('.header .logo').click(function() {
-  var menu = Menu.buildFromTemplate([
-    {
-      label: 'Pritunl v' + constants.version
-    },
-    {
-      label: 'View System Logs',
-      click: function() {
-        closeServiceEditor();
-        openSystemEditor();
+const decorateProfile = prfl => {
+  var prflConnect = function() {
+    prfl.postConnect(true, function(authType, callback) {
+      if (!authType) {
+        closeMenu($profile)
+        return
       }
-    },
-    {
-      label: 'View Service Logs',
-      click: function() {
-        closeSystemEditor();
-        openServiceEditor();
+
+      var handler
+      var username = ""
+      var password = ""
+      authType = authType.split("_")
+
+      var authHandler = function() {
+        if (authType.indexOf("username") !== -1) {
+          authType.splice(authType.indexOf("username"), 1)
+
+          handler = function(evt) {
+            if (evt.type === "keypress" && evt.which !== 13) {
+              return
+            }
+
+            var user = $profile.find(".connect-user-input").val()
+            if (user) {
+              username = user
+
+              if (!authType.length) {
+                callback(username, password)
+                closeMenu($profile)
+              } else {
+                authHandler()
+              }
+            } else {
+              closeMenu($profile)
+            }
+          }
+
+          $profile.find(".menu .connect-confirm").bind("click", handler)
+          $profile.find(".connect-user-input").bind("keypress", handler)
+          $profile.find(".menu").addClass("authenticating-user")
+          setTimeout(function() {
+            $profile.find(".connect-user-input").focus()
+          }, 150)
+        } else if (authType.indexOf("password") !== -1) {
+          authType.splice(authType.indexOf("password"), 1)
+
+          handler = function(evt) {
+            if (evt.type === "keypress" && evt.which !== 13) {
+              return
+            }
+
+            var pass = $profile.find(".connect-pass-input").val()
+            if (pass) {
+              password += pass
+
+              if (!authType.length) {
+                callback(username, password)
+                closeMenu($profile)
+              } else {
+                authHandler()
+              }
+            } else {
+              closeMenu($profile)
+            }
+          }
+
+          $profile.find(".menu .connect-confirm").bind("click", handler)
+          $profile.find(".connect-pass-input").bind("keypress", handler)
+          $profile.find(".menu").addClass("authenticating-pass")
+          setTimeout(function() {
+            $profile.find(".connect-pass-input").focus()
+          }, 150)
+        } else if (authType.indexOf("pin") !== -1) {
+          authType.splice(authType.indexOf("pin"), 1)
+
+          handler = function(evt) {
+            if (evt.type === "keypress" && evt.which !== 13) {
+              return
+            }
+
+            var pin = $profile.find(".connect-pin-input").val()
+            if (pin) {
+              password += pin
+
+              if (!authType.length) {
+                callback(username, password)
+                closeMenu($profile)
+              } else {
+                authHandler()
+              }
+            } else {
+              closeMenu($profile)
+            }
+          }
+
+          $profile.find(".menu .connect-confirm").bind("click", handler)
+          $profile.find(".connect-pin-input").bind("keypress", handler)
+          $profile.find(".menu").addClass("authenticating-pin")
+          setTimeout(function() {
+            $profile.find(".connect-pin-input").focus()
+          }, 150)
+        } else if (authType.indexOf("duo") !== -1) {
+          authType.splice(authType.indexOf("duo"), 1)
+          authType.splice(authType.indexOf("otp"), 1)
+
+          $profile
+            .find(".connect-otp-input")
+            .attr("placeholder", "Enter Duo Passcode")
+
+          handler = function(evt) {
+            if (evt.type === "keypress" && evt.which !== 13) {
+              return
+            }
+
+            var otpCode = $profile.find(".connect-otp-input").val()
+            if (otpCode) {
+              password += otpCode
+
+              if (!authType.length) {
+                callback(username, password)
+                closeMenu($profile)
+              } else {
+                authHandler()
+              }
+            } else {
+              closeMenu($profile)
+            }
+          }
+
+          $profile.find(".menu .connect-confirm").bind("click", handler)
+          $profile.find(".connect-otp-input").bind("keypress", handler)
+          $profile.find(".menu").addClass("authenticating-otp")
+          setTimeout(function() {
+            $profile.find(".connect-otp-input").focus()
+          }, 150)
+        } else if (authType.indexOf("onelogin") !== -1) {
+          authType.splice(authType.indexOf("onelogin"), 1)
+          authType.splice(authType.indexOf("otp"), 1)
+
+          $profile
+            .find(".connect-otp-input")
+            .attr("placeholder", "Enter OneLogin Passcode")
+
+          handler = function(evt) {
+            if (evt.type === "keypress" && evt.which !== 13) {
+              return
+            }
+
+            var otpCode = $profile.find(".connect-otp-input").val()
+            if (otpCode) {
+              password += otpCode
+
+              if (!authType.length) {
+                callback(username, password)
+                closeMenu($profile)
+              } else {
+                authHandler()
+              }
+            } else {
+              closeMenu($profile)
+            }
+          }
+
+          $profile.find(".menu .connect-confirm").bind("click", handler)
+          $profile.find(".connect-otp-input").bind("keypress", handler)
+          $profile.find(".menu").addClass("authenticating-otp")
+          setTimeout(function() {
+            $profile.find(".connect-otp-input").focus()
+          }, 150)
+        } else if (authType.indexOf("okta") !== -1) {
+          authType.splice(authType.indexOf("okta"), 1)
+          authType.splice(authType.indexOf("otp"), 1)
+
+          $profile
+            .find(".connect-otp-input")
+            .attr("placeholder", "Enter Okta Passcode")
+
+          handler = function(evt) {
+            if (evt.type === "keypress" && evt.which !== 13) {
+              return
+            }
+            unbindAll($profile)
+
+            var otpCode = $profile.find(".connect-otp-input").val()
+            if (otpCode) {
+              password += otpCode
+
+              if (!authType.length) {
+                callback(username, password)
+                closeMenu($profile)
+              } else {
+                authHandler()
+              }
+            } else {
+              closeMenu($profile)
+            }
+          }
+
+          $profile.find(".menu .connect-confirm").bind("click", handler)
+          $profile.find(".connect-otp-input").bind("keypress", handler)
+          $profile.find(".menu").addClass("authenticating-otp")
+          setTimeout(function() {
+            $profile.find(".connect-otp-input").focus()
+          }, 150)
+        } else if (authType.indexOf("yubikey") !== -1) {
+          authType.splice(authType.indexOf("yubikey"), 1)
+
+          handler = function(evt) {
+            if (evt.type === "keypress" && evt.which !== 13) {
+              return
+            }
+            unbindAll($profile)
+
+            var otpCode = $profile.find(".connect-yubikey-input").val()
+            if (otpCode) {
+              password += otpCode
+
+              if (!authType.length) {
+                callback(username, password)
+                closeMenu($profile)
+              } else {
+                authHandler()
+              }
+            } else {
+              closeMenu($profile)
+            }
+          }
+
+          // $profile.find(".menu .connect-confirm").bind("click", handler)
+          // $profile.find(".connect-yubikey-input").bind("keypress", handler)
+          // $profile.find(".menu").addClass("authenticating-yubikey")
+        } else if (authType.indexOf("otp") !== -1) {
+          authType.splice(authType.indexOf("otp"), 1)
+
+          var otpCode = otp
+          if (otpCode) {
+            password += otpCode
+
+            if (!authType.length) {
+              callback(username, password)
+              // closeMenu($profile)
+            } else {
+              authHandler()
+            }
+          }
+          // $profile.find(".menu .connect-confirm").bind("click", handler)
+          // $profile.find(".connect-otp-input").bind("keypress", handler)
+          // $profile.find(".menu").addClass("authenticating-otp")
+          // setTimeout(function() {
+          //   $profile.find(".connect-otp-input").focus()
+          // }, 150)
+        } else {
+          callback(username, password)
+          // closeMenu($profile)
+        }
       }
-    }
-  ]);
-  menu.popup(remote.getCurrentWindow());
-});
+      authHandler()
+    })
+  }
+
+  return prflConnect
+}
+
+profileView.init(profiles => {
+  const decoratedProfiles = profiles.map(decorateProfile)
+
+  decoratedProfiles[0]()
+})
